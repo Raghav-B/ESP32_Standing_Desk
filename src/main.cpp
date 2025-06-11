@@ -8,8 +8,10 @@
 #define UP_SPEED 100    // Range from 0 to 255. Above 125 not recommended due to high current
 #define DOWN_SPEED 60  
 
-volatile float max_height = 0;   // Lower than actual encoder max ticks
-volatile float min_height = 0;   // Cannot be below 0
+// The encoder when going down seems to be much more sensitive than when going up
+// The scale seems to be around 1500 == 31117
+volatile float max_height = 1500;   // Lower than actual encoder max ticks 1500 seems right.
+volatile float min_height = 0;      // Cannot be below 0
 volatile float cur_height = 0;
 
 volatile bool height_changed = false;
@@ -124,52 +126,16 @@ void encoder_isr() {
         // Encoder treated as going down
         cur_height--;
 
-        // Prevent checks using max and min height during calibration
-        // if (calib_state == CalibrationState::CALIB_DOWN || calib_state == CalibrationState::RESETTING_CALIB) {
-        //     return;
-        // }  
-
-        // bool should_consider_goal = 
-        //     ros_cmd_state == ROSCommandState::RUNNING &&
-        //     calib_state == CalibrationState::NO_CALIB &&
-        //     cur_height == goal;
-
-        // if (cur_height < min_height || should_consider_goal) {
-        //     // Stop lift from going any lower
-        //     stopMotor();
-        //     cur_height = max(min_height, cur_height);
-        //     calib_state = CalibrationState::NO_CALIB;
-            
-        //     if (should_consider_goal) {
-        //         ros_cmd_state = ROSCommandState::COMPLETED;
-        //     }
-        // }
-
     } else if (dir_signal == Signal::UP) {
         // Encoder treated as going up
         cur_height++;
-
-        // Prevent checks using max and min height during calibration
-        // if (calib_state == CalibrationState::CALIB_UP) {
-        //     return;
-        // }
-
-        // bool should_consider_goal = 
-        //     ros_cmd_state == ROSCommandState::RUNNING &&
-        //     calib_state == CalibrationState::NO_CALIB &&
-        //     cur_height == goal;
         
-        // if (cur_height > max_height || should_consider_goal) {
-        //     // Stop lift from going higher
-        //     stopMotor();
-        //     cur_height = min(max_height, cur_height);
-            
-        //     if (should_consider_goal) {
-        //         ros_cmd_state = ROSCommandState::COMPLETED;
-        //     }
-        // }
-    } else {
-        // Serial.println("xERROR: Encoder ISR called while lift is not moving");
+        if (cur_height > max_height) {
+            // Stop lift from going higher
+            stopMotor();
+            cur_height = min(max_height, cur_height);
+            ros_cmd_state = ROSCommandState::COMPLETED;
+        }
     }
 }
 
@@ -298,8 +264,8 @@ void loop() {
         // If the lift is moving, check if it has been a while since the last response
         // If so, stop the lift and send a warning to the ROS node
         if (millis() - last_resp_time > 500) {
-            Serial.println("xERROR: Lift not responding, stopping motor");
             stopMotor();
+            cur_height = max(min_height, cur_height); // Ensure we don't go below min height
             Serial.println((char)Arduino2NodeCommand::CURRENT_LIMIT_TRIGGERED);
             // current_limit_warning_sent = true;
         }
