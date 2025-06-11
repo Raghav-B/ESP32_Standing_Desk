@@ -1,4 +1,6 @@
 #include <Arduino.h>
+#include <ESP8266WiFi.h>
+#include <ESP8266WebServer.h>
 
 #define PWM_PIN 5   // Sends PWM signal to control lift speed
 #define CNT_1 13    // Used to control direction of lift
@@ -72,6 +74,9 @@ int goal = 0;
 
 // Flags to ensure status messages are only sent back to the ROS node once
 bool current_limit_warning_sent = false;
+
+ESP8266WebServer server(80);  // HTTP on port 80
+
 
 // Needed for to properly use ISR with ESP8266
 void IRAM_ATTR encoder_isr();
@@ -171,6 +176,59 @@ void motorControl() {
 }
 
 
+void setupServer() {
+  // Set your desired static IP, gateway, and subnet
+  IPAddress local_IP(192, 168, 18, 42);      // IP you want for the ESP
+  IPAddress gateway(192, 168, 18, 1);        // Usually your router's IP
+  IPAddress subnet(255, 255, 255, 0);       // Standard for home networks
+  IPAddress dns(8, 8, 8, 8);                // Optional: Google DNS
+  
+  if (!WiFi.config(local_IP, gateway, subnet, dns)) {
+    Serial.println("WiFi failed to configure");
+    return;
+  }
+  WiFi.begin("TheMatrix", "asdasdasd");
+  Serial.print("Connecting to WiFi");
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  
+  Serial.println();
+  Serial.print("Connected. IP address: ");
+  Serial.println(WiFi.localIP());
+
+  // Register endpoints
+  server.on("/up", []() {
+    continuousUp();
+    server.send(200, "text/plain", "Moving up");
+  });
+
+  server.on("/down", []() {
+    continuousDown();
+    server.send(200, "text/plain", "Moving down");
+  });
+
+  server.on("/stop", []() {
+    stopMotor();
+    server.send(200, "text/plain", "Stopped");
+  });
+
+  // server.on("/move_to", HTTP_POST, []() {
+  //   if (!server.hasArg("goal")) {
+  //     server.send(400, "text/plain", "Missing 'goal' param");
+  //     return;
+  //   }
+  //   float goal = server.arg("goal").toFloat();
+  //   handleROSInput(goal);
+  //   server.send(200, "text/plain", "Moving to goal height");
+  // });
+
+  server.begin();
+}
+
+
 void setup() {
   pinMode(ENC1, INPUT);
   pinMode(PWM_PIN, OUTPUT);
@@ -182,6 +240,8 @@ void setup() {
   Serial.begin(115200);
 
   Serial.println("xLift booting up");
+
+  setupServer();
 }
 
 
@@ -252,6 +312,8 @@ void loop() {
         String input = Serial.readStringUntil('\n');
         handleSerialInput(input);
     }
+
+    server.handleClient();
     
     // If we have finished a movement sent out by ROS, inform the lift controller
     // ROS node that the movement is complete
