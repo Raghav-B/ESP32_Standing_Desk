@@ -6,7 +6,8 @@
 #define ENC1 2      // Encoder 1 in lift
 #define ENC2 7      // Encoder 2 in lift
 
-#define BASE_SPEED 100    // Range from 0 to 255. Above 125 not recommended due to high current
+#define UP_SPEED 100    // Range from 0 to 255. Above 125 not recommended due to high current
+#define DOWN_SPEED 60  
 
 volatile float max_height = 0;   // Lower than actual encoder max ticks
 volatile float min_height = 0;   // Cannot be below 0
@@ -87,7 +88,7 @@ void continuousDown() {
   }
 
   dir_signal = Signal::DOWN;
-  pwm = BASE_SPEED;
+  pwm = DOWN_SPEED;
   last_resp_time = millis();
 }
 
@@ -101,7 +102,7 @@ void continuousUp() {
   }
 
   dir_signal = Signal::UP;
-  pwm = BASE_SPEED;
+  pwm = UP_SPEED;
   last_resp_time = millis();
 }
 
