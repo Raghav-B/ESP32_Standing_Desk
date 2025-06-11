@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
-#include <ESP8266WebServer.h>
+#include <ESPAsyncTCP.h>
+#include <ESPAsyncWebServer.h>
 
 #define PWM_PIN 5   // Sends PWM signal to control lift speed
 #define CNT_1 13    // Used to control direction of lift
@@ -75,7 +76,30 @@ int goal = 0;
 // Flags to ensure status messages are only sent back to the ROS node once
 bool current_limit_warning_sent = false;
 
-ESP8266WebServer server(80);  // HTTP on port 80
+AsyncWebServer server(80);
+AsyncWebSocket ws("/ws");
+const char* html_page = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head><title>Lift Controller</title></head>
+<body>
+  <h2>Lift Control Panel</h2>
+  <button onclick="ws.send('up')">Up</button>
+  <button onclick="ws.send('down')">Down</button>
+  <button onclick="ws.send('stop')">Stop</button>
+  <p id="status">Status: --</p>
+<script>
+let ws = new WebSocket(`ws://${location.hostname}/ws`);
+
+ws.onopen = () => console.log("WebSocket open");
+ws.onmessage = (e) => {
+  document.getElementById("status").textContent = "Status: " + e.data;
+  console.log("Server:", e.data);
+};
+</script>
+</body>
+</html>
+)rawliteral";
 
 
 // Needed for to properly use ISR with ESP8266
@@ -176,6 +200,34 @@ void motorControl() {
 }
 
 
+void onWebSocketMessage(void *arg, uint8_t *data, size_t len) {
+  AwsFrameInfo *info = (AwsFrameInfo*)arg;
+
+  if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
+    String msg = "";
+    for (size_t i = 0; i < len; i++) {
+      msg += (char)data[i];  // Build the String manually
+    }
+    Serial.println("WS Message: " + msg);
+
+    if (msg == "up") {
+      continuousUp();
+    } else if (msg == "down") {
+      continuousDown();
+    } else if (msg == "stop") {
+      stopMotor();
+    } 
+    // else if (msg.startsWith("goal:")) {
+    //   float val = msg.substring(5).toFloat();
+    //   handleROSInput(val);
+    // }
+
+    // Send back confirmation
+    ws.textAll("ack:" + msg);
+  }
+}
+
+
 void setupServer() {
   // Set your desired static IP, gateway, and subnet
   IPAddress local_IP(192, 168, 18, 42);      // IP you want for the ESP
@@ -199,32 +251,22 @@ void setupServer() {
   Serial.print("Connected. IP address: ");
   Serial.println(WiFi.localIP());
 
-  // Register endpoints
-  server.on("/up", []() {
-    continuousUp();
-    server.send(200, "text/plain", "Moving up");
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send_P(200, "text/html", html_page);  // Serve inline HTML
   });
 
-  server.on("/down", []() {
-    continuousDown();
-    server.send(200, "text/plain", "Moving down");
+  ws.onEvent([](AsyncWebSocket * server, AsyncWebSocketClient * client,
+                AwsEventType type, void * arg, uint8_t *data, size_t len) {
+    if (type == WS_EVT_CONNECT) {
+      Serial.println("WebSocket client connected");
+    } else if (type == WS_EVT_DISCONNECT) {
+      Serial.println("WebSocket client disconnected");
+    } else if (type == WS_EVT_DATA) {
+      onWebSocketMessage(arg, data, len);
+    }
   });
 
-  server.on("/stop", []() {
-    stopMotor();
-    server.send(200, "text/plain", "Stopped");
-  });
-
-  // server.on("/move_to", HTTP_POST, []() {
-  //   if (!server.hasArg("goal")) {
-  //     server.send(400, "text/plain", "Missing 'goal' param");
-  //     return;
-  //   }
-  //   float goal = server.arg("goal").toFloat();
-  //   handleROSInput(goal);
-  //   server.send(200, "text/plain", "Moving to goal height");
-  // });
-
+  server.addHandler(&ws);
   server.begin();
 }
 
@@ -312,8 +354,6 @@ void loop() {
         String input = Serial.readStringUntil('\n');
         handleSerialInput(input);
     }
-
-    server.handleClient();
     
     // If we have finished a movement sent out by ROS, inform the lift controller
     // ROS node that the movement is complete
@@ -323,7 +363,7 @@ void loop() {
     }
     
     if (dir_signal != Signal::STOP) {
-        // If the lift is moving, check if it has been a while since the last response
+      // If the lift is moving, check if it has been a while since the last response
         // If so, stop the lift and send a warning to the ROS node
         if (millis() - last_resp_time > 500) {
             stopMotor();
@@ -331,6 +371,8 @@ void loop() {
             Serial.println((char)Arduino2NodeCommand::CURRENT_LIMIT_TRIGGERED);
             // current_limit_warning_sent = true;
         }
+
+        ws.textAll("height:" + String(cur_height));
         
         // else if (current_limit_warning_sent) {
         //     // If we have sent a warning before, we can now send an untriggered message
