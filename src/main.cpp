@@ -3,8 +3,7 @@
 #define PWM_PIN 5   // Sends PWM signal to control lift speed
 #define CNT_1 13    // Used to control direction of lift
 #define CNT_2 12    // Used to control direction of lift
-#define ENC1 2      // Encoder 1 in lift
-#define ENC2 7      // Encoder 2 in lift
+#define ENC1 4      // Encoder 1 in lift
 
 #define UP_SPEED 100    // Range from 0 to 255. Above 125 not recommended due to high current
 #define DOWN_SPEED 60  
@@ -70,9 +69,10 @@ volatile CalibrationState calib_state = CalibrationState::NO_CALIB;
 int goal = 0;
 
 // Flags to ensure status messages are only sent back to the ROS node once
-bool optical_sensor_update_sent = false;
-// bool optical_sensor_off_sent = false;
 bool current_limit_warning_sent = false;
+
+// Needed for to properly use ISR with ESP8266
+void IRAM_ATTR encoder_isr();
 
 
 // Lift keeps moving down continuously
@@ -119,68 +119,57 @@ void stopMotor() {
 void encoder_isr() {
     last_resp_time = millis();
     height_changed = true;
-    int enc_val = digitalRead(ENC2);
 
-    if (!enc_val) {
-      // Handle case where encoder values lag behind newly sent
-      // command in opposite direction
-      if (dir_signal == Signal::DOWN) {
-        return;
-      }
-      
-      // Encoder reports going up
-      cur_height++;
+    if (dir_signal == Signal::DOWN) {
+        // Encoder treated as going down
+        cur_height--;
 
-      // Prevent checks using max and min height during calibration
-      if (calib_state == CalibrationState::CALIB_UP) {
-        return;
-      }
+        // Prevent checks using max and min height during calibration
+        // if (calib_state == CalibrationState::CALIB_DOWN || calib_state == CalibrationState::RESETTING_CALIB) {
+        //     return;
+        // }  
 
-      bool should_consider_goal = 
-        ros_cmd_state == ROSCommandState::RUNNING &&
-        calib_state == CalibrationState::NO_CALIB &&
-        cur_height == goal;
-    
-      if (cur_height > max_height || should_consider_goal) {
-        // Stop lift from going higher
-        stopMotor();
-        cur_height = min(max_height, cur_height);
+        // bool should_consider_goal = 
+        //     ros_cmd_state == ROSCommandState::RUNNING &&
+        //     calib_state == CalibrationState::NO_CALIB &&
+        //     cur_height == goal;
+
+        // if (cur_height < min_height || should_consider_goal) {
+        //     // Stop lift from going any lower
+        //     stopMotor();
+        //     cur_height = max(min_height, cur_height);
+        //     calib_state = CalibrationState::NO_CALIB;
+            
+        //     if (should_consider_goal) {
+        //         ros_cmd_state = ROSCommandState::COMPLETED;
+        //     }
+        // }
+
+    } else if (dir_signal == Signal::UP) {
+        // Encoder treated as going up
+        cur_height++;
+
+        // Prevent checks using max and min height during calibration
+        // if (calib_state == CalibrationState::CALIB_UP) {
+        //     return;
+        // }
+
+        // bool should_consider_goal = 
+        //     ros_cmd_state == ROSCommandState::RUNNING &&
+        //     calib_state == CalibrationState::NO_CALIB &&
+        //     cur_height == goal;
         
-        if (should_consider_goal) {
-          ros_cmd_state = ROSCommandState::COMPLETED;
-        }
-      }
-
+        // if (cur_height > max_height || should_consider_goal) {
+        //     // Stop lift from going higher
+        //     stopMotor();
+        //     cur_height = min(max_height, cur_height);
+            
+        //     if (should_consider_goal) {
+        //         ros_cmd_state = ROSCommandState::COMPLETED;
+        //     }
+        // }
     } else {
-      // Handle case where encoder values lag behind newly sent
-      // command in opposite direction
-      if (dir_signal == Signal::UP) {
-        return;
-      }
-
-      // Encoder reports going down
-      cur_height--;
-
-      // Prevent checks using max and min height during calibration
-      if (calib_state == CalibrationState::CALIB_DOWN || calib_state == CalibrationState::RESETTING_CALIB) {
-        return;
-      }  
-
-      bool should_consider_goal = 
-        ros_cmd_state == ROSCommandState::RUNNING &&
-        calib_state == CalibrationState::NO_CALIB &&
-        cur_height == goal;
-
-      if (cur_height < min_height || should_consider_goal) {
-        // Stop lift from going any lower
-        stopMotor();
-        cur_height = max(min_height, cur_height);
-        calib_state = CalibrationState::NO_CALIB;
-        
-        if (should_consider_goal) {
-          ros_cmd_state = ROSCommandState::COMPLETED;
-        }
-      }
+        // Serial.println("xERROR: Encoder ISR called while lift is not moving");
     }
 }
 
@@ -217,14 +206,13 @@ void motorControl() {
 
 
 void setup() {
-//   pinMode(ENC1, INPUT);
-//   pinMode(ENC2, INPUT);
+  pinMode(ENC1, INPUT);
   pinMode(PWM_PIN, OUTPUT);
   pinMode(CNT_1, OUTPUT);
   pinMode(CNT_2, OUTPUT);
   
   // Setup interrupt service routine
-//    attachInterrupt(digitalPinToInterrupt(ENC1), encoder_isr, RISING);
+  attachInterrupt(digitalPinToInterrupt(ENC1), encoder_isr, RISING);
   Serial.begin(115200);
 
   Serial.println("xLift booting up");
@@ -293,18 +281,35 @@ void handleSerialInput(String input) {
 
 
 void loop() {
-  // Handle input from Serial port
-  if (Serial.available()) {
-    String input = Serial.readStringUntil('\n');
-    handleSerialInput(input);
-  }
-  
-  // If we have finished a movement sent out by ROS, inform the lift controller
-  // ROS node that the movement is complete
-  if (ros_cmd_state == ROSCommandState::COMPLETED) {
-    Serial.println((char)Arduino2NodeCommand::ROS_CMD_COMPLETE);
-    ros_cmd_state = ROSCommandState::NO_COMMAND;
-  }
-  
-  motorControl(); // Execute motor control signal sending
+    // Handle input from Serial port
+    if (Serial.available()) {
+        String input = Serial.readStringUntil('\n');
+        handleSerialInput(input);
+    }
+    
+    // If we have finished a movement sent out by ROS, inform the lift controller
+    // ROS node that the movement is complete
+    if (ros_cmd_state == ROSCommandState::COMPLETED) {
+        Serial.println((char)Arduino2NodeCommand::ROS_CMD_COMPLETE);
+        ros_cmd_state = ROSCommandState::NO_COMMAND;
+    }
+    
+    if (dir_signal != Signal::STOP) {
+        // If the lift is moving, check if it has been a while since the last response
+        // If so, stop the lift and send a warning to the ROS node
+        if (millis() - last_resp_time > 500) {
+            Serial.println("xERROR: Lift not responding, stopping motor");
+            stopMotor();
+            Serial.println((char)Arduino2NodeCommand::CURRENT_LIMIT_TRIGGERED);
+            // current_limit_warning_sent = true;
+        }
+        
+        // else if (current_limit_warning_sent) {
+        //     // If we have sent a warning before, we can now send an untriggered message
+        //     Serial.println((char)Arduino2NodeCommand::CURRENT_LIMIT_UNTRIGGERED);
+        //     current_limit_warning_sent = false;
+        // }
+    }
+
+    motorControl(); // Execute motor control signal sending
 }
