@@ -6,7 +6,14 @@
 #define PWM_PIN 5   // Sends PWM signal to control lift speed
 #define CNT_1 13    // Used to control direction of lift
 #define CNT_2 12    // Used to control direction of lift
-#define ENC1 4      // Encoder 1 in lift
+#define LIFT_ENC1 4      // Encoder 1 in lift
+
+#define LIGHT_ENC1 15
+#define LIGHT_ENC2 2
+#define LIGHT_CONTROL 14
+
+// Remaining OUT GPIOs
+// 0, 16
 
 #define UP_SPEED 100    // Range from 0 to 255. Above 125 not recommended due to high current
 #define DOWN_SPEED 60  
@@ -24,6 +31,7 @@ bool dir_changed = false;
 unsigned long start_dir_change_time;
 
 volatile int pwm = 0;
+bool light_toggled = false;
 
 // Enumerates commands/communication receivable by the lift
 enum Node2ArduinoCommand {
@@ -33,7 +41,12 @@ enum Node2ArduinoCommand {
   MOVE_UP,                  // d
   STOP_MOVE,                // e
   CALIBRATE,                // f
-  ROS_MOVE                  // g
+  ROS_MOVE,                 // g
+  LIGHT_TOGGLE,             // h
+  LIGHT_BRIGHT_UP,          // i
+  LIGHT_BRIGHT_DOWN,        // j
+  LIGHT_TEMP_UP,            // k
+  LIGHT_TEMP_DOWN           // l
 };
 
 // Enumerates commands/communication that can be sent by the lift
@@ -87,6 +100,14 @@ const char* html_page = R"rawliteral(
   <button onclick="ws.send('up')">Up</button>
   <button onclick="ws.send('down')">Down</button>
   <button onclick="ws.send('stop')">Stop</button>
+
+  <h2>Light Controls</h2>
+  <button onclick="ws.send('light:toggle')">Toggle Light</button>
+  <button onclick="ws.send('light:bright_up')">Brightness +</button>
+  <button onclick="ws.send('light:bright_down')">Brightness -</button>
+  <button onclick="ws.send('light:temp_up')">Temp +</button>
+  <button onclick="ws.send('light:temp_down')">Temp -</button>
+
   <p id="status">Status: --</p>
 <script>
 let ws = new WebSocket(`ws://${location.hostname}/ws`);
@@ -103,11 +124,11 @@ ws.onmessage = (e) => {
 
 
 // Needed for to properly use ISR with ESP8266
-void IRAM_ATTR encoder_isr();
+void IRAM_ATTR encoderISR();
 
 
 // Lift keeps moving down continuously
-// Check for reaching minimum height or lowest physical height is done in encoder_isr()
+// Check for reaching minimum height or lowest physical height is done in encoderISR()
 // If the lift reaches its lowest physical height, this function behaves equivalent to downUntilReset();
 void continuousDown() {
   // Handle case where lift starts/changes direction and there is a momentary
@@ -125,7 +146,7 @@ void continuousDown() {
 
 
 // Lift keeps moving up continuously
-// Check for reaching maximum height is done in encoder_isr()
+// Check for reaching maximum height is done in encoderISR()
 void continuousUp() {
   if (dir_signal != Signal::UP) {
     dir_changed = true;
@@ -147,7 +168,7 @@ void stopMotor() {
 
 // Interrupt service triggered when ENCODER_1 pin rises
 // Used to update how far the lift has moved
-void encoder_isr() {
+void encoderISR() {
     last_resp_time = millis();
     height_changed = true;
 
@@ -200,6 +221,47 @@ void motorControl() {
 }
 
 
+void lightToggle() {
+  digitalWrite(LIGHT_CONTROL, LOW);
+  delay(100);
+  digitalWrite(LIGHT_CONTROL, HIGH);
+}
+
+
+void lightBrightUp() {
+  digitalWrite(LIGHT_ENC1, HIGH);
+  digitalWrite(LIGHT_ENC2, LOW);
+  delay(10);
+  digitalWrite(LIGHT_ENC1, LOW);
+}
+
+
+void lightBrightDown() {
+  digitalWrite(LIGHT_ENC1, LOW);
+  digitalWrite(LIGHT_ENC2, HIGH);
+  delay(10);
+  digitalWrite(LIGHT_ENC2, LOW);
+}
+
+
+void lightTempUp() {
+  digitalWrite(LIGHT_CONTROL, LOW);
+  delay(100);
+  lightBrightUp();
+  delay(100);
+  digitalWrite(LIGHT_CONTROL, HIGH);
+}
+
+
+void lightTempDown() {
+  digitalWrite(LIGHT_CONTROL, LOW);
+  delay(100);
+  lightBrightDown();
+  delay(100);
+  digitalWrite(LIGHT_CONTROL, HIGH);
+}
+
+
 void onWebSocketMessage(void *arg, uint8_t *data, size_t len) {
   AwsFrameInfo *info = (AwsFrameInfo*)arg;
 
@@ -216,7 +278,17 @@ void onWebSocketMessage(void *arg, uint8_t *data, size_t len) {
       continuousDown();
     } else if (msg == "stop") {
       stopMotor();
-    } 
+    } else if (msg == "light:toggle") {
+      lightToggle();
+    } else if (msg == "light:bright_up") {
+      lightBrightUp();
+    } else if (msg == "light:bright_down") {
+      lightBrightDown();
+    } else if (msg == "light:temp_up") {
+      lightTempUp();
+    } else if (msg == "light:temp_down") {
+      lightTempDown();
+    }
     // else if (msg.startsWith("goal:")) {
     //   float val = msg.substring(5).toFloat();
     //   handleROSInput(val);
@@ -272,15 +344,22 @@ void setupServer() {
 
 
 void setup() {
-  pinMode(ENC1, INPUT);
+  // Setup lift stuf
+  pinMode(LIFT_ENC1, INPUT);
   pinMode(PWM_PIN, OUTPUT);
   pinMode(CNT_1, OUTPUT);
-  pinMode(CNT_2, OUTPUT);
+  pinMode(CNT_2, OUTPUT);  
+  attachInterrupt(digitalPinToInterrupt(LIFT_ENC1), encoderISR, RISING);
   
-  // Setup interrupt service routine
-  attachInterrupt(digitalPinToInterrupt(ENC1), encoder_isr, RISING);
-  Serial.begin(115200);
+  // Setup light stuff
+  pinMode(LIGHT_CONTROL, OUTPUT);
+  pinMode(LIGHT_ENC1, OUTPUT);
+  pinMode(LIGHT_ENC2, OUTPUT);
+  digitalWrite(LIGHT_CONTROL, HIGH);
+  digitalWrite(LIGHT_ENC1, HIGH);
+  digitalWrite(LIGHT_ENC2, HIGH);
 
+  Serial.begin(115200);
   Serial.println("xLift booting up");
 
   setupServer();
@@ -342,6 +421,21 @@ void handleSerialInput(String input) {
     float raw_goal = input.substring(1).toFloat();
     handleROSInput(raw_goal);
   
+  } else if (cmd == Node2ArduinoCommand::LIGHT_TOGGLE) {
+    lightToggle();
+  
+  } else if (cmd == Node2ArduinoCommand::LIGHT_BRIGHT_UP) {
+    lightBrightUp();
+  
+  } else if (cmd == Node2ArduinoCommand::LIGHT_BRIGHT_DOWN) {
+    lightBrightDown();
+
+  } else if (cmd == Node2ArduinoCommand::LIGHT_TEMP_UP) {
+    lightTempUp();
+  
+  } else if (cmd == Node2ArduinoCommand::LIGHT_TEMP_DOWN) {
+    lightTempDown();
+
   } else {
     Serial.println("xUNKNOWN SERIAL INPUT");
   }
