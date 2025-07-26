@@ -15,8 +15,8 @@
 // Remaining OUT GPIOs
 // 0, 16
 
-#define UP_SPEED 100    // Range from 0 to 255. Above 125 not recommended due to high current
-#define DOWN_SPEED 60  
+#define UP_SPEED 150    // Range from 0 to 255. Above 125 not recommended due to high current
+#define DOWN_SPEED 80  
 
 // The encoder when going down seems to be much more sensitive than when going up
 // The scale seems to be around 1500 == 31117
