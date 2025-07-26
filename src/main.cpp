@@ -311,7 +311,7 @@ void setupServer() {
     Serial.println("WiFi failed to configure");
     return;
   }
-  WiFi.begin("TheMatrix", "asdasdasd");
+  WiFi.begin("TM_Reloaded", "asdasdasd");
   Serial.print("Connecting to WiFi");
 
   while (WiFi.status() != WL_CONNECTED) {
