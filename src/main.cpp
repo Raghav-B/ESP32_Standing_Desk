@@ -94,7 +94,53 @@ AsyncWebSocket ws("/ws");
 const char* html_page = R"rawliteral(
 <!DOCTYPE html>
 <html>
-<head><title>Lift Controller</title></head>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Lift Controller</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 20px;
+      text-align: center;
+      background-color: #f5f5f5;
+    }
+
+    h2 {
+      margin-top: 30px;
+      color: #333;
+    }
+
+    button {
+      display: block;
+      width: 90%;
+      max-width: 300px;
+      margin: 10px auto;
+      padding: 15px;
+      font-size: 18px;
+      border: none;
+      border-radius: 8px;
+      background-color: #007BFF;
+      color: white;
+      cursor: pointer;
+      transition: background-color 0.3s ease;
+      touch-action: manipulation;
+    }
+
+    button:hover {
+      background-color: #0056b3;
+    }
+
+    button:active {
+      background-color: #004b9c;
+    }
+
+    #status {
+      margin-top: 30px;
+      font-weight: bold;
+    }
+  </style>
+</head>
 <body>
   <h2>Lift Control Panel</h2>
   <button onclick="ws.send('up')">Up</button>
@@ -109,6 +155,7 @@ const char* html_page = R"rawliteral(
   <button onclick="ws.send('light:temp_down')">Temp -</button>
 
   <p id="status">Status: --</p>
+
 <script>
 let ws = new WebSocket(`ws://${location.hostname}/ws`);
 
@@ -121,6 +168,7 @@ ws.onmessage = (e) => {
 </body>
 </html>
 )rawliteral";
+
 
 
 // Needed for to properly use ISR with ESP8266
